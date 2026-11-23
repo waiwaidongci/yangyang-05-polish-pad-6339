@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 def create_run(db, request, actor):
     parameters = validated(SPEC['parameters'], request.parameters, defaults=True)
+    # Freeze the sample with one statement-level snapshot. An import commits as a
+    # single transaction, so a run captures either the whole batch before or the
+    # whole batch after a correction, never a mixture. Queued and archived runs keep
+    # these ids, so later imports cannot change them.
     sample_ids = list(db.scalars(select(Observation.id).order_by(Observation.id)))
     if not sample_ids:
         raise BusinessError('请先导入观测记录')
@@ -62,8 +66,14 @@ def run_pending(db):
     if item is None:
         return False
     try:
-        sample = list(db.scalars(select(Observation.payload).where(Observation.id.in_(item.observation_ids))
-                                 .order_by(Observation.id)))
+        rows = db.execute(select(Observation.id, Observation.payload)
+                          .where(Observation.id.in_(item.observation_ids))
+                          .order_by(Observation.id)).all()
+        # The run is pinned to ids frozen at submission. An archived result must keep
+        # seeing exactly that sample even if later imports superseded a reading.
+        if len(rows) != len(item.observation_ids):
+            raise ValueError('参与本次分析的观测记录不完整，请重新发起分析。')
+        sample = [{**payload, '_observation_id': observation_id} for observation_id, payload in rows]
         result = analyze(sample, item.parameters)
         if not {'headline', 'summary', 'metrics', 'columns', 'rows'} <= set(result):
             raise RuntimeError('invalid result schema')

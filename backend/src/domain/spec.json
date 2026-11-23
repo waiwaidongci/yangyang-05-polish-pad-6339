@@ -8,7 +8,7 @@
   "decision_prompt": "三组是否存在 Ra 分布差异？哪些布型的 Ra 中位数降幅足以进入小批试产？",
   "fields": [
     {"key": "lot_code", "label": "工件批号", "type": "text", "help": "仅比较同一来料批次，例如 GD-261109-A。", "example": "GD-261109-A"},
-    {"key": "piece_code", "label": "工件编号", "type": "text", "help": "同批次内每件独立工件只能记录一次。", "example": "GD-261109-A-061"},
+    {"key": "piece_code", "label": "工件编号", "type": "text", "help": "同批次内每件独立工件保留一个布型；返测按测量日期取最新一次，同日读数冲突则该件隔离。", "example": "GD-261109-A-061"},
     {"key": "measured_on", "label": "测量日期", "type": "date", "example": "2026-11-13"},
     {"key": "cloth_type", "label": "抛光布型", "type": "choice", "choices": ["短绒布（现用）", "致密无纺布", "微孔聚氨酯布"], "example": "微孔聚氨酯布"},
     {"key": "roughness_nm", "label": "抛光后粗糙度 Ra（nm）", "type": "integer", "min": 1, "max": 1000, "help": "按粗糙度仪导出的整纳米读数录入，数值越低表面越平滑。", "example": 22}

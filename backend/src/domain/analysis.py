@@ -79,25 +79,123 @@ def validate(row: dict) -> None:
         raise ValueError("抛光后粗糙度 Ra 须为 1 至 1000 nm 的整数。")
 
 
-def _lot_groups(rows: list[dict], lot: str) -> dict[str, list[int]]:
-    groups = {cloth: [] for cloth in CLOTHS}
-    pieces = set()
+ADOPTED = "采用"
+REPEATED = "同日重复"
+SUPERSEDED = "被返测替代"
+QUARANTINED = "隔离冲突"
+
+VERSION_COLUMNS = [
+    {"key": "piece_code", "label": "工件编号"},
+    {"key": "measured_on", "label": "测量日期"},
+    {"key": "cloth_type", "label": "抛光布"},
+    {"key": "roughness_nm", "label": "Ra（nm）"},
+    {"key": "observation_id", "label": "记录号"},
+    {"key": "version_state", "label": "版本状态"},
+    {"key": "note", "label": "说明"},
+]
+
+
+def _version_row(version: dict, state: str, note: str) -> dict:
+    return {
+        "piece_code": version["piece_code"],
+        "measured_on": version["measured_on"],
+        "cloth_type": version["cloth_type"],
+        "roughness_nm": version["roughness_nm"],
+        "observation_id": version["observation_id"],
+        "version_state": state,
+        "note": note,
+    }
+
+
+def _resolve_lot(rows: list[dict], lot: str) -> tuple[dict[str, list[int]], dict]:
+    """Keep one reading per piece, using measurement date rather than import order.
+
+    A later measurement date is a retest and replaces earlier readings for the same
+    piece. If the latest date itself carries conflicting readings, the piece cannot
+    be resolved and is quarantined; other pieces in the lot still enter the test.
+    """
+    by_piece: dict[str, list[dict]] = {}
     for row in rows:
         row_lot = row.get("lot_code")
         if not isinstance(row_lot, str) or row_lot.strip() != lot:
             continue
         validate(row)
         piece = row["piece_code"].strip()
-        if piece in pieces:
-            raise ValueError(f"批次 {lot} 的工件 {piece} 重复。每件工件只保留一个布型和一次读数。")
-        pieces.add(piece)
-        groups[row["cloth_type"]].append(int(row["roughness_nm"]))
-    if not pieces:
+        by_piece.setdefault(piece, []).append({
+            "observation_id": row.get("_observation_id"),
+            "piece_code": piece,
+            "measured_on": row["measured_on"],
+            "cloth_type": row["cloth_type"],
+            "roughness_nm": int(row["roughness_nm"]),
+        })
+    if not by_piece:
         raise ValueError(f"批次 {lot} 没有可分析的工件记录。")
+
+    groups = {cloth: [] for cloth in CLOTHS}
+    adopted = 0
+    quarantined = []
+    version_rows = []
+    for piece in sorted(by_piece):
+        versions = sorted(
+            by_piece[piece],
+            key=lambda item: (item["measured_on"], -1 if item["observation_id"] is None else item["observation_id"]),
+        )
+        latest = max(item["measured_on"] for item in versions)
+        latest_versions = [item for item in versions if item["measured_on"] == latest]
+        signature = {(item["cloth_type"], item["roughness_nm"]) for item in latest_versions}
+        if len(signature) > 1:
+            readings = []
+            for item in latest_versions:
+                label = f"{item['cloth_type']} {item['roughness_nm']} nm"
+                if label not in readings:
+                    readings.append(label)
+            reason = (f"测量日期 {latest} 有 {len(latest_versions)} 条不一致的读数"
+                      f"（{'、'.join(readings)}），无法确定采用哪一次返测。")
+            quarantined.append({
+                "piece_code": piece,
+                "measured_on": latest,
+                "reason": reason,
+                "readings": [dict(item) for item in latest_versions],
+            })
+            for item in versions:
+                if item["measured_on"] == latest:
+                    version_rows.append(_version_row(item, QUARANTINED, "最新日期读数互相冲突，本件隔离"))
+                else:
+                    version_rows.append(_version_row(item, QUARANTINED, "本件因最新日期读数冲突而隔离，未参与计算"))
+            continue
+
+        chosen = latest_versions[0]
+        groups[chosen["cloth_type"]].append(chosen["roughness_nm"])
+        adopted += 1
+        earlier_dates = sorted({item["measured_on"] for item in versions if item["measured_on"] < latest})
+        for item in versions:
+            if item is chosen:
+                if earlier_dates:
+                    note = f"采用 {latest} 的返测读数，替代 {len(earlier_dates)} 个较早日期"
+                elif len(latest_versions) > 1:
+                    note = "同日重复读数一致，取记录号最小的一条"
+                else:
+                    note = ""
+                version_rows.append(_version_row(item, ADOPTED, note))
+            elif item["measured_on"] == latest:
+                version_rows.append(_version_row(item, REPEATED, "同日重复读数一致，未参与计算"))
+            else:
+                version_rows.append(_version_row(item, SUPERSEDED, f"被 {latest} 的返测读数替代，未参与计算"))
+
+    if adopted == 0:
+        raise ValueError(f"批次 {lot} 的 {len(quarantined)} 件工件都因同一测量日期读数冲突被隔离，"
+                         "没有可计算的工件。请核对返测记录后重新导入。")
     short = [f"{cloth} {len(values)} 件" for cloth, values in groups.items() if len(values) < MIN_GROUP_SIZE]
     if short:
-        raise ValueError(f"每种抛光布至少需要 {MIN_GROUP_SIZE} 件独立工件。当前不足：{'、'.join(short)}。")
-    return groups
+        suffix = f"；另有 {len(quarantined)} 件因同日读数冲突被隔离" if quarantined else ""
+        raise ValueError(f"每种抛光布至少需要 {MIN_GROUP_SIZE} 件独立工件。当前不足："
+                         f"{'、'.join(short)}{suffix}。")
+    resolution = {"version_rows": version_rows, "quarantined": quarantined}
+    return groups, resolution
+
+
+def _lot_groups(rows: list[dict], lot: str) -> tuple[dict[str, list[int]], dict]:
+    return _resolve_lot(rows, lot)
 
 
 def _kruskal_wallis(groups: dict[str, list[int]]) -> tuple[float, float, float, dict[str, float]]:
@@ -140,7 +238,7 @@ def analyze(rows: list[dict], parameters: dict) -> dict:
         raise ValueError("最小有用降幅须在 0 至 1000 nm 之间。")
 
     lot = lot.strip()
-    groups = _lot_groups(rows, lot)
+    groups, resolution = _lot_groups(rows, lot)
     statistic, p_value, tie_correction, mean_ranks = _kruskal_wallis(groups)
     current_median = median(groups[CURRENT_CLOTH])
     results = []
@@ -172,14 +270,20 @@ def analyze(rows: list[dict], parameters: dict) -> dict:
         names = "、".join(candidates)
         decision = f"优先复核 {names}，中位数较现用低 {reduction:g} nm，达到 {minimum:g} nm 试产门槛。"
     caveat = "整体检验只判断三组是否存在分布差异。试产还要用独立批次核对候选布的成对差异、划伤率和布耗。"
+    retests = sum(1 for item in resolution["version_rows"] if item["version_state"] == SUPERSEDED)
+    quarantine_note = ""
+    if resolution["quarantined"]:
+        quarantine_note = f"另有 {len(resolution['quarantined'])} 件因最新测量日期读数冲突被隔离，未参与计算。"
     return {
         "headline": headline,
-        "summary": f"批次 {lot}。{decision}{caveat}",
+        "summary": f"批次 {lot}。{decision}{caveat}{quarantine_note}",
         "metrics": [
             {"label": "独立工件数", "value": sum(map(len, groups.values())), "unit": "件"},
             {"label": "并列校正 H", "value": round(statistic, 6)},
             {"label": "整体 p 值", "value": float(f"{p_value:.6g}")},
             {"label": "并列校正系数", "value": round(tie_correction, 6)},
+            {"label": "被替代的历史读数", "value": retests, "unit": "条"},
+            {"label": "隔离工件数", "value": len(resolution["quarantined"]), "unit": "件"},
         ],
         "columns": [
             {"key": "cloth", "label": "抛光布"},
@@ -191,6 +295,11 @@ def analyze(rows: list[dict], parameters: dict) -> dict:
             {"key": "reduction_nm", "label": "较现用降低（nm）"},
         ],
         "rows": results,
+        "versions": {
+            "columns": VERSION_COLUMNS,
+            "rows": resolution["version_rows"],
+            "quarantined": resolution["quarantined"],
+        },
         "chart": {
             "label": "各布型抛光后 Ra 中位数",
             "unit": "nm",

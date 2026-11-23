@@ -19,7 +19,7 @@ export async function analysisPage(spec, user) {
   const runs = await get('/runs');
   return `${intro('分析任务', spec.algorithm)}<div class="split"><section class="panel"><div class="panel-heading"><h2>计算条件</h2></div>
     ${user.role === Role.ANALYST ? `<form id="run-form" class="panel-body"><label class="field"><span>分析名称</span><input name="title" required maxlength="120" value="${esc(spec.direction)}复核"></label><div class="form-grid">${spec.parameters.map(parameter => fieldControl(parameter,true)).join('')}</div>${formError}<button class="primary">提交计算</button></form>` : '<p class="panel-body">由业务分析员提交计算。此账号可查看当前角色有权访问的分析任务。</p>'}</section>
-    <aside class="method"><h2>计算口径</h2><p>${esc(spec.formula)}</p><p class="aside-note">提交时固化参与计算的观测清单，后续导入不会改变历史结果。</p></aside></div>
+    <aside class="method"><h2>计算口径</h2><p>${esc(spec.formula)}</p><p class="aside-note">提交时固化参与计算的观测清单：已排队和已归档的分析保留原样本，之后导入的返测不会改变它们；确认收下更正后发起的新分析会使用新样本。每件按测量日期取最新读数，同日读数冲突的工件会被隔离。</p></aside></div>
     <section class="panel"><div class="panel-heading"><h2>历史分析</h2></div>${runTable(runs, '还没有可查看的分析。提交计算后可在这里追踪。')}</section>`;
 }
 
