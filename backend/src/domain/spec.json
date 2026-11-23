@@ -1,0 +1,21 @@
+{
+  "organization": "绍兴曙盘精密光学 · 磨抛工艺组",
+  "tagline": "在同一工件批次内比较三种抛光布的表面粗糙度，筛出值得试产复核的布型。",
+  "source": "粗糙度仪班次导出与工位领料工票，按工件编号合并成一件一行。",
+  "record_name": "镜片抛光读数",
+  "algorithm": "Kruskal–Wallis 三组独立样本秩检验（并列秩校正）",
+  "formula": "合并同批次三组 Ra 读数排序，同值取平均秩。H₀ = 12 × Σ[nᵢ(r̄ᵢ − (N+1)/2)²] / [N(N+1)]。并列校正 C = 1 − Σ(t³−t)/(N³−N)，H = H₀/C。三组自由度为 2，近似 p = exp(−H/2)。",
+  "decision_prompt": "三组是否存在 Ra 分布差异？哪些布型的 Ra 中位数降幅足以进入小批试产？",
+  "fields": [
+    {"key": "lot_code", "label": "工件批号", "type": "text", "help": "仅比较同一来料批次，例如 GD-261109-A。", "example": "GD-261109-A"},
+    {"key": "piece_code", "label": "工件编号", "type": "text", "help": "同批次内每件独立工件只能记录一次。", "example": "GD-261109-A-061"},
+    {"key": "measured_on", "label": "测量日期", "type": "date", "example": "2026-11-13"},
+    {"key": "cloth_type", "label": "抛光布型", "type": "choice", "choices": ["短绒布（现用）", "致密无纺布", "微孔聚氨酯布"], "example": "微孔聚氨酯布"},
+    {"key": "roughness_nm", "label": "抛光后粗糙度 Ra（nm）", "type": "integer", "min": 1, "max": 1000, "help": "按粗糙度仪导出的整纳米读数录入，数值越低表面越平滑。", "example": 22}
+  ],
+  "parameters": [
+    {"key": "lot_code", "label": "待复核工件批号", "type": "text", "default": "GD-261109-A", "help": "也可用 GD-261116-B 复核另一批工件。"},
+    {"key": "alpha", "label": "整体检验显著性水平 α", "type": "number", "min": 0.001, "max": 0.2, "default": 0.05},
+    {"key": "min_reduction_nm", "label": "试产所需最小中位数降幅（nm）", "type": "number", "min": 0, "max": 1000, "default": 3, "help": "以同批现用短绒布为基准，候选布的粗糙度中位数必须实际下降。"}
+  ]
+}
